@@ -6,6 +6,7 @@ module.exports = {
       env: {
         PORT: 3000,
         TRACK_TIMEOUT_MS: 30000,
+        SERVIENTREGA_TIMEOUT_MS: 60000,
         TRACK_CACHE_TTL_MS: 300000
       }
     }

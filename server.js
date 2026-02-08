@@ -7,6 +7,7 @@ app.use(express.json({ limit: "1mb" }));
 
 const PORT = process.env.PORT || 3000;
 const TIMEOUT_MS = Number(process.env.TRACK_TIMEOUT_MS || 30000);
+const SERVIENTREGA_TIMEOUT_MS = Number(process.env.SERVIENTREGA_TIMEOUT_MS || 60000);
 const CACHE_TTL_MS = Number(process.env.TRACK_CACHE_TTL_MS || 300000);
 
 const cache = new Map();
@@ -530,12 +531,21 @@ async function trackServientrega({ guia, startedAt, debug, includeLines }) {
       return route.continue();
     });
     page = await context.newPage();
-    page.setDefaultTimeout(TIMEOUT_MS);
+    page.setDefaultTimeout(SERVIENTREGA_TIMEOUT_MS);
     // El formulario real está embebido en un iframe en el portal.
-    await page.goto("https://mobile.servientrega.com/WebSitePortal/RastreoEnvio.html", {
-      waitUntil: "domcontentloaded",
-      timeout: TIMEOUT_MS
-    });
+    const servientregaUrl = "https://mobile.servientrega.com/WebSitePortal/RastreoEnvio.html";
+    try {
+      await page.goto(servientregaUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: SERVIENTREGA_TIMEOUT_MS
+      });
+    } catch (e) {
+      // Retry once con networkidle para conexiones lentas
+      await page.goto(servientregaUrl, {
+        waitUntil: "networkidle",
+        timeout: SERVIENTREGA_TIMEOUT_MS
+      });
+    }
 
     const filled = await fillGuiaInAnyFrame(page, guia, /gu[ií]a|env[ií]o|n[uú]mero|documento/i);
     if (!filled) {
