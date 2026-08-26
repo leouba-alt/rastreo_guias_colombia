@@ -217,7 +217,7 @@ function requireGuiaAndCarrier(req, res, next) {
   if (!["coordinadora", "interrapidisimo", "servientrega"].includes(transportadora)) {
     return res.status(400).json({
       ok: false,
-      error: "Transportadora inválida. Usa 'coordinadora', 'interrapidisimo' o 'servientrega'."
+      error: "Transportadora inválida. Usa 'coordinadora', 'interrapidisimo', 'servientrega' o 'envia'."
     });
   }
   req.guia = guia;
