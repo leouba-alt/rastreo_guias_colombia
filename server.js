@@ -217,7 +217,7 @@ function requireGuiaAndCarrier(req, res, next) {
   if (!["coordinadora", "interrapidisimo", "servientrega"].includes(transportadora)) {
     return res.status(400).json({
       ok: false,
-      error: "Transportadora inválida. Usa 'coordinadora', 'interrapidisimo', 'servientrega' o 'envia'."
+      error: "Transportadora inválida. Usa 'coordinadora', 'interrapidisimo' o 'servientrega'."
     });
   }
   req.guia = guia;
@@ -592,6 +592,99 @@ async function trackServientrega({ guia, startedAt, debug, includeLines }) {
   }
 }
 
+async function trackEnvia({ guia, startedAt, debug, includeLines }) {
+  const browser = await getBrowser();
+  let page;
+  let context;
+
+  try {
+    context = await browser.newContext();
+
+    await context.route("**/*", (route) => {
+      const type = route.request().resourceType();
+
+      if (["image", "media", "font"].includes(type)) {
+        return route.abort();
+      }
+
+      return route.continue();
+    });
+
+    page = await context.newPage();
+    page.setDefaultTimeout(TIMEOUT_MS);
+
+    await page.goto("https://envia.co/", {
+      waitUntil: "domcontentloaded",
+      timeout: TIMEOUT_MS
+    });
+
+    const formulario = page.locator("#cotizador_rastrea_num");
+    const campoGuia = formulario.locator("input.input-rastreo");
+    const botonRastrear = formulario.locator("button.btn_primary");
+
+    await campoGuia.waitFor({
+      state: "visible",
+      timeout: TIMEOUT_MS
+    });
+
+    // La guía se maneja como texto para conservar el cero inicial.
+    await campoGuia.fill(String(guia));
+
+    await botonRastrear.click();
+
+    // Espera a que Envía cargue la pantalla con el resultado.
+    await page.waitForTimeout(5000);
+
+    await page
+      .waitForFunction(
+        (numeroGuia) =>
+          document.body.innerText.includes(numeroGuia) ||
+          !window.location.href.endsWith("envia.co/"),
+        guia,
+        { timeout: TIMEOUT_MS }
+      )
+      .catch(() => null);
+
+    const rawText =
+      (await page.locator("body").innerText().catch(() => ""))?.trim() || "";
+
+    const lineas = splitLines(rawText);
+
+    const parsed = {
+      guia,
+      estado_actual: null,
+      origen: null,
+      destino: null
+    };
+
+    if (includeLines) {
+      parsed.lineas = lineas;
+    }
+
+    return {
+      ok: true,
+      transportadora: "envia",
+      guia,
+      parsed,
+      raw: rawText,
+      took_ms: Date.now() - startedAt
+    };
+  } catch (err) {
+    const debugInfo =
+      debug && page ? await maybeDumpDebug(page, "envia") : null;
+
+    throw new Error(
+      `${err?.message || "Error en Envía"}${
+        debugInfo ? ` Debug: ${JSON.stringify(debugInfo)}` : ""
+      }`
+    );
+  } finally {
+    if (context) {
+      await context.close();
+    }
+  }
+}
+
 app.post("/tracking", requireGuiaAndCarrier, async (req, res) => {
   const guia = req.guia;
   const transportadora = req.transportadora;
@@ -609,12 +702,37 @@ app.post("/tracking", requireGuiaAndCarrier, async (req, res) => {
   }
 
   try {
-    const result =
-      transportadora === "coordinadora"
-        ? await trackCoordinadora({ guia, startedAt, debug, includeLines: includeLinesFinal })
-        : transportadora === "interrapidisimo"
-          ? await trackInterrapidisimo({ guia, startedAt, debug, includeLines: includeLinesFinal })
-          : await trackServientrega({ guia, startedAt, debug, includeLines: includeLinesFinal });
+    let result;
+
+if (transportadora === "coordinadora") {
+  result = await trackCoordinadora({
+    guia,
+    startedAt,
+    debug,
+    includeLines: includeLinesFinal
+  });
+} else if (transportadora === "interrapidisimo") {
+  result = await trackInterrapidisimo({
+    guia,
+    startedAt,
+    debug,
+    includeLines: includeLinesFinal
+  });
+} else if (transportadora === "servientrega") {
+  result = await trackServientrega({
+    guia,
+    startedAt,
+    debug,
+    includeLines: includeLinesFinal
+  });
+} else if (transportadora === "envia") {
+  result = await trackEnvia({
+    guia,
+    startedAt,
+    debug,
+    includeLines: includeLinesFinal
+  });
+}
     if (!includeRaw && !debug) {
       delete result.raw;
     }
