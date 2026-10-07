@@ -598,48 +598,42 @@ async function trackEnvia({ guia, startedAt, debug, includeLines }) {
   let context;
 
   try {
-    context = await browser.newContext();
-
-    await context.route("**/*", (route) => {
-      const type = route.request().resourceType();
-
-      if (["image", "media", "font"].includes(type)) {
-        return route.abort();
-      }
-
-      return route.continue();
+    context = await browser.newContext({
+      locale: "es-CO",
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+        "AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Chrome/131.0.0.0 Safari/537.36"
     });
 
     page = await context.newPage();
-    page.setDefaultTimeout(TIMEOUT_MS);
+    page.setDefaultTimeout(45000);
 
     const numeroGuia = String(guia).trim();
     const urlRastreo =
       `https://envia.co/tracking?guia=${encodeURIComponent(numeroGuia)}`;
 
     await page.goto(urlRastreo, {
-      waitUntil: "domcontentloaded",
-      timeout: TIMEOUT_MS
+      waitUntil: "commit",
+      timeout: 45000
     });
 
     await page.locator("h1").filter({
       hasText: "Rastreo de tu envío"
     }).waitFor({
       state: "visible",
-      timeout: TIMEOUT_MS
+      timeout: 45000
     });
 
-    await page.waitForFunction(
-      () => {
-        const texto = document.body.innerText || "";
+    const estadoLocator = page.locator("main main h2").first();
 
-        return (
-          texto.includes("Estado actual") &&
-          texto.includes("Datos del envío")
-        );
-      },
-      { timeout: TIMEOUT_MS }
-    );
+    await estadoLocator.waitFor({
+      state: "visible",
+      timeout: 45000
+    });
+
+    const estadoActual =
+      (await estadoLocator.innerText().catch(() => null)) || null;
 
     const rawText =
       (await page.locator("body").innerText().catch(() => ""))?.trim() || "";
@@ -655,9 +649,9 @@ async function trackEnvia({ guia, startedAt, debug, includeLines }) {
       return indice >= 0 ? lineas[indice + 1] || null : null;
     };
 
-    const estadoActual =
-      (await page.locator("h2").first().innerText().catch(() => null)) ||
-      obtenerValor("Estado actual");
+    if (!estadoActual) {
+      throw new Error("Envía no devolvió el estado actual de la guía");
+    }
 
     const parsed = {
       guia: numeroGuia,
