@@ -613,48 +613,59 @@ async function trackEnvia({ guia, startedAt, debug, includeLines }) {
     page = await context.newPage();
     page.setDefaultTimeout(TIMEOUT_MS);
 
-    await page.goto("https://envia.co/", {
+    const numeroGuia = String(guia).trim();
+    const urlRastreo =
+      `https://envia.co/tracking?guia=${encodeURIComponent(numeroGuia)}`;
+
+    await page.goto(urlRastreo, {
       waitUntil: "domcontentloaded",
       timeout: TIMEOUT_MS
     });
 
-    const formulario = page.locator("#cotizador_rastrea_num");
-    const campoGuia = formulario.locator("input.input-rastreo");
-    const botonRastrear = formulario.locator("button.btn_primary");
-
-    await campoGuia.waitFor({
+    await page.locator("h1").filter({
+      hasText: "Rastreo de tu envío"
+    }).waitFor({
       state: "visible",
       timeout: TIMEOUT_MS
     });
 
-    // La guía se maneja como texto para conservar el cero inicial.
-    await campoGuia.fill(String(guia));
+    await page.waitForFunction(
+      () => {
+        const texto = document.body.innerText || "";
 
-    await botonRastrear.click();
-
-    // Espera a que Envía cargue la pantalla con el resultado.
-    await page.waitForTimeout(5000);
-
-    await page
-      .waitForFunction(
-        (numeroGuia) =>
-          document.body.innerText.includes(numeroGuia) ||
-          !window.location.href.endsWith("envia.co/"),
-        guia,
-        { timeout: TIMEOUT_MS }
-      )
-      .catch(() => null);
+        return (
+          texto.includes("Estado actual") &&
+          texto.includes("Datos del envío")
+        );
+      },
+      { timeout: TIMEOUT_MS }
+    );
 
     const rawText =
       (await page.locator("body").innerText().catch(() => ""))?.trim() || "";
 
     const lineas = splitLines(rawText);
 
+    const obtenerValor = (etiqueta) => {
+      const indice = lineas.findIndex(
+        (linea) =>
+          String(linea).trim().toLowerCase() === etiqueta.toLowerCase()
+      );
+
+      return indice >= 0 ? lineas[indice + 1] || null : null;
+    };
+
+    const estadoActual =
+      (await page.locator("h2").first().innerText().catch(() => null)) ||
+      obtenerValor("Estado actual");
+
     const parsed = {
-      guia,
-      estado_actual: null,
-      origen: null,
-      destino: null
+      guia: numeroGuia,
+      estado_actual: estadoActual,
+      origen: obtenerValor("Origen"),
+      destino: obtenerValor("Destino"),
+      fecha_estimada: obtenerValor("Tiempo estimado de entrega"),
+      tipo_servicio: obtenerValor("Tipo de servicio")
     };
 
     if (includeLines) {
@@ -664,7 +675,7 @@ async function trackEnvia({ guia, startedAt, debug, includeLines }) {
     return {
       ok: true,
       transportadora: "envia",
-      guia,
+      guia: numeroGuia,
       parsed,
       raw: rawText,
       took_ms: Date.now() - startedAt
@@ -674,7 +685,7 @@ async function trackEnvia({ guia, startedAt, debug, includeLines }) {
       debug && page ? await maybeDumpDebug(page, "envia") : null;
 
     throw new Error(
-      `${err?.message || "Error en Envía"}${
+      `${err?.message || "Error consultando Envía"}${
         debugInfo ? ` Debug: ${JSON.stringify(debugInfo)}` : ""
       }`
     );
