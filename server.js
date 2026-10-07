@@ -592,78 +592,71 @@ async function trackServientrega({ guia, startedAt, debug, includeLines }) {
   }
 }
 
-async function trackEnvia({ guia, startedAt, debug, includeLines }) {
-  const browser = await getBrowser();
-  let page;
-  let context;
+async function trackEnvia({ guia, startedAt, includeLines }) {
+  const numeroGuia = String(guia).trim();
+
+  const endpoint =
+    "https://envia-qa.envia.co/EnviaV2_Api/api/tracking/individual";
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
 
   try {
-    context = await browser.newContext({
-      locale: "es-CO",
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-        "AppleWebKit/537.36 (KHTML, like Gecko) " +
-        "Chrome/131.0.0.0 Safari/537.36"
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify({
+        guiaNumber: numeroGuia
+      }),
+      signal: controller.signal
     });
 
-    page = await context.newPage();
-    page.setDefaultTimeout(45000);
+    const resultado = await response.json();
 
-    const numeroGuia = String(guia).trim();
-    const urlRastreo =
-      `https://envia.co/tracking?guia=${encodeURIComponent(numeroGuia)}`;
-
-    await page.goto(urlRastreo, {
-      waitUntil: "commit",
-      timeout: 45000
-    });
-
-    await page.locator("h1").filter({
-      hasText: "Rastreo de tu envío"
-    }).waitFor({
-      state: "visible",
-      timeout: 45000
-    });
-
-    const estadoLocator = page.locator("main main h2").first();
-
-    await estadoLocator.waitFor({
-      state: "visible",
-      timeout: 45000
-    });
-
-    const estadoActual =
-      (await estadoLocator.innerText().catch(() => null)) || null;
-
-    const rawText =
-      (await page.locator("body").innerText().catch(() => ""))?.trim() || "";
-
-    const lineas = splitLines(rawText);
-
-    const obtenerValor = (etiqueta) => {
-      const indice = lineas.findIndex(
-        (linea) =>
-          String(linea).trim().toLowerCase() === etiqueta.toLowerCase()
+    if (!response.ok) {
+      throw new Error(
+        `Envía respondió HTTP ${response.status}`
       );
-
-      return indice >= 0 ? lineas[indice + 1] || null : null;
-    };
-
-    if (!estadoActual) {
-      throw new Error("Envía no devolvió el estado actual de la guía");
     }
+
+    if (!resultado?.success || !resultado?.data) {
+      throw new Error(
+        resultado?.message ||
+          "Envía no devolvió información para esta guía"
+      );
+    }
+
+    const datos = resultado.data;
 
     const parsed = {
       guia: numeroGuia,
-      estado_actual: estadoActual,
-      origen: obtenerValor("Origen"),
-      destino: obtenerValor("Destino"),
-      fecha_estimada: obtenerValor("Tiempo estimado de entrega"),
-      tipo_servicio: obtenerValor("Tipo de servicio")
+      estado_actual:
+        datos.estadoActual ||
+        datos.eventCode ||
+        datos.description ||
+        null,
+      codigo_estado: datos.codEstado || null,
+      origen: datos.origin || null,
+      destino: datos.destination || null,
+      ubicacion_actual: datos.location || null,
+      fecha_estimada: datos.eta || null,
+      tipo_servicio: datos.serviceType || null,
+      tiene_novedad: Boolean(datos.tieneNovedad),
+      tipo_novedad: datos.tipoNovedad || null,
+      mensaje_novedad: datos.mensajeNovedad || null,
+      fecha_evento: datos.date || null
     };
 
     if (includeLines) {
-      parsed.lineas = lineas;
+      parsed.lineas = [
+        parsed.estado_actual,
+        parsed.origen,
+        parsed.destino,
+        parsed.ubicacion_actual
+      ].filter(Boolean);
     }
 
     return {
@@ -671,22 +664,21 @@ async function trackEnvia({ guia, startedAt, debug, includeLines }) {
       transportadora: "envia",
       guia: numeroGuia,
       parsed,
-      raw: rawText,
+      raw: JSON.stringify(resultado),
       took_ms: Date.now() - startedAt
     };
   } catch (err) {
-    const debugInfo =
-      debug && page ? await maybeDumpDebug(page, "envia") : null;
+    if (err?.name === "AbortError") {
+      throw new Error(
+        "La consulta de Envía superó los 30 segundos"
+      );
+    }
 
     throw new Error(
-      `${err?.message || "Error consultando Envía"}${
-        debugInfo ? ` Debug: ${JSON.stringify(debugInfo)}` : ""
-      }`
+      err?.message || "Error consultando Envía"
     );
   } finally {
-    if (context) {
-      await context.close();
-    }
+    clearTimeout(timeout);
   }
 }
 
